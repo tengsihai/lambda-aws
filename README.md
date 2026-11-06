@@ -172,24 +172,19 @@ POST /items
 | `terraform-aws` | VPC 私有子网、Lambda 安全组 | 部署时从其 S3 state 读 `outputs` |
 | `mysql-aws` | 数据库表结构 | 表名已写死在 `common/schema.py`，表由它创建 |
 
-**terraform-aws 需要满足的前提**（state key：`<前缀>/<环境>/terraform.tfstate`）：
+**terraform-aws 现状**（state key：`<前缀>/<环境>/terraform.tfstate`）：
 
 1. 根模块导出 `private_subnet_ids`（已有）；
-2. 根模块导出 `lambda_security_group_id`（**需新增**）：
-   ```hcl
-   output "lambda_security_group_id" {
-     description = "Security group attached to the Lambda functions."
-     value       = module.vpc.additional_security_group_ids["lambda"]
-   }
-   ```
-3. 用 `additional_security_groups` 建一张只出不入的 `lambda` 安全组，
-   并把它加进 `module.rds` 的 `allowed_security_group_ids`，
-   否则 RDS 只放行跳板机，Lambda 连不上数据库；
-4. 把 `secretsmanager` 加进 `interface_endpoint_services`。
+2. `lambda` 安全组 dev 已建好：零入站，出站只有 TCP/3306 到 MySQL、
+   TCP/443 到 Secrets Manager 的 Interface 端点，并已加入 RDS 的
+   `allowed_security_group_ids`；
+3. Secrets Manager Interface 端点 dev 已开启
+   （`env.tfvars` 里 `interface_endpoint_services = ["secretsmanager"]`）；
+4. 根模块已导出 `lambda_security_group_id`，且已 `apply` 进 state。
 
-> 第 4 条是硬前提：该 VPC **没有 NAT 网关**，`interface_endpoint_services` 目前是空的，
-> 私有子网里的 Lambda 无法访问 Secrets Manager，运行时读口令会直接失败。
-> Interface 端点按时区计费，dev 环境记得纳入成本考虑。
+> 该 VPC **没有 NAT 网关**，私有子网里的 Lambda 读口令必须走 Interface 端点。
+> 目前只维护 dev 环境；staging/prod 若要启用，需先补上 `secretsmanager` 端点。
+> Interface 端点按 AZ-hour 计费。
 
 **mysql-aws 的用法**：表 `t_migration_check` 由该工程创建与维护，本工程不建表、
 也不在部署时去读它。表结构若有变动，需要同步修改 `common/schema.py` 里的
@@ -367,11 +362,13 @@ make check          # 以上全部
 同时确认部署角色有该桶的 `s3:GetObject`。
 
 **`state 中缺少 outputs.lambda_security_group_id`**
-→ terraform-aws 还没导出这个输出，按「依赖的外部工程」一节补齐后重新 apply。
+→ terraform-aws 还没在 `environments/<环境>/outputs.tf` 里导出这个输出，
+按「依赖的外部工程」一节补上后重新 apply。
 
 **运行时读口令报 `SecretsManager` 连接超时**
-→ Lambda 在私有子网里，而该 VPC 没有 NAT 网关。需要在 terraform-aws 把
-`secretsmanager` 加进 `interface_endpoint_services` 并 apply。
+→ Lambda 在私有子网里，而该 VPC 没有 NAT 网关。确认该环境的
+`interface_endpoint_services` 包含 `secretsmanager` 并已 apply
+（dev 已开启）。
 
 **运行时连不上数据库（安全组/超时）**
 → 确认 terraform-aws 已把 `lambda` 安全组加进 RDS 的 `allowed_security_group_ids`。
