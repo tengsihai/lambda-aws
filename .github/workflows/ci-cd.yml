@@ -210,7 +210,7 @@ jobs:
 
       - name: API 冒烟测试
         # 只校验「请求确实到达了 Lambda」，不校验业务数据。
-        # 表结构由专门的 DB 工程维护，这里不应与它耦合。
+        # 表结构由 mysql-aws 工程维护，这里不应与它耦合。
         run: |
           url="${{ steps.api.outputs.url }}/items"
           echo "GET $url"

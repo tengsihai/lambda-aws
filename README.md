@@ -9,7 +9,7 @@ Python 编写的 AWS Lambda 增删改查后端：四个 Lambda 分别负责**新
 - 依赖：**Lambda Layer**，四个函数共享
 - CI/CD：GitHub Actions，通过 **OIDC 换取临时凭证**部署，无长期 AccessKey
 
-> 表结构不在本工程内维护，由专门的 DB 工程负责（仓库中没有 `schema.sql`）。
+> 表 `t_migration_check` 由 mysql-aws 工程创建与维护，本工程只读写（仓库中没有 `schema.sql`）。
 
 ---
 
@@ -24,6 +24,7 @@ Python 编写的 AWS Lambda 增删改查后端：四个 Lambda 分别负责**新
 │   ├── requirements.txt          # 函数包不含三方依赖（说明见文件内注释）
 │   ├── common/                   # 四个函数共享的基础设施
 │   │   ├── config.py             #   环境变量配置
+│   │   ├── schema.py             #   表名（写死）与字段校验
 │   │   ├── secrets.py            #   Secrets Manager 读取 + 进程内缓存
 │   │   ├── db.py                 #   MySQL 连接与事务
 │   │   ├── http.py               #   事件解析与响应封装
@@ -46,22 +47,57 @@ Python 编写的 AWS Lambda 增删改查后端：四个 Lambda 分别负责**新
 
 ---
 
-## 二、API
+## 二、表与 API
+
+操作的表是 **`t_migration_check`**，由 `mysql-aws` 工程创建与维护，本工程只读写、不建表。
+表名**直接写死在 [src/common/schema.py](src/common/schema.py)** 里，不走环境变量：
+改表名必须改代码并走一次完整发布，避免某个环境的配置和真实表结构对不上。
+
+| 字段 | 类型 | 约束 | 接口行为 |
+| --- | --- | --- | --- |
+| `id` | BIGINT UNSIGNED PK | 自增 | 路径参数 |
+| `biz_no` | VARCHAR(64) | NOT NULL，唯一 | 新增必填，**创建后不可修改** |
+| `name` | VARCHAR(128) | NOT NULL | 新增必填，可更新 |
+| `status` | TINYINT UNSIGNED | DEFAULT 0，CHECK ∈ {0,1,2} | 可选，越界直接 400 |
+| `amount` | DECIMAL(18,2) | DEFAULT 0.00 | 可选，按字符串传给驱动避免浮点误差 |
+| `payload` | JSON | NULL | 可选，读写都做 JSON 编解码 |
+| `remark` | VARCHAR(255) | NULL | 可选 |
+| `is_deleted` | TINYINT(1) | DEFAULT 0 | **软删除标记**，见下 |
+| `created_at` / `updated_at` | DATETIME | 列默认值 | 只读 |
+
+**软删除**：`DELETE` 只把 `is_deleted` 置 1，不物理删除；
+读接口一律带 `is_deleted = 0`，因此已删除的记录查询会得到 404。
 
 | 方法 | 路径 | 函数 | 说明 |
 | --- | --- | --- | --- |
 | POST | `/items` | create | 新增，返回 201 |
 | GET | `/items` | read | 分页列表，支持 `?limit=&offset=` |
-| GET | `/items/{id}` | read | 单条查询，不存在返回 404 |
+| GET | `/items/{id}` | read | 单条查询，不存在或已删除返回 404 |
 | PUT | `/items/{id}` | update | 部分更新，返回 200 |
-| DELETE | `/items/{id}` | delete | 删除，返回 204 |
+| DELETE | `/items/{id}` | delete | 软删除，返回 204 |
+
+新增示例：
+
+```json
+POST /items
+{
+  "biz_no": "BIZ-0001",
+  "name": "示例",
+  "status": 1,
+  "amount": "12.50",
+  "payload": { "source": "pipeline" },
+  "remark": "可选"
+}
+```
+
+只有 `biz_no` 和 `name` 必填；没提供的可选字段不写入，交给列默认值。
 
 统一响应结构：
 
 ```json
 { "data": { "...": "..." } }
 { "data": [], "meta": { "total": 0, "limit": 20, "offset": 0 } }
-{ "code": "VALIDATION_ERROR", "message": "name 不能为空" }
+{ "code": "VALIDATION_ERROR", "message": "biz_no 不能为空" }
 ```
 
 `code` 取值：`VALIDATION_ERROR`(400)、`NOT_FOUND`(404)、`CONFLICT`(409)、
@@ -134,7 +170,7 @@ Python 编写的 AWS Lambda 增删改查后端：四个 Lambda 分别负责**新
 | 工程 | 提供什么 | 本工程怎么用 |
 | --- | --- | --- |
 | `terraform-aws` | VPC 私有子网、Lambda 安全组 | 部署时从其 S3 state 读 `outputs` |
-| `mysql-aws` | 数据库表结构 | **只在开发阶段看一次**，据此确定 `TABLE_NAME` |
+| `mysql-aws` | 数据库表结构 | 表名已写死在 `common/schema.py`，表由它创建 |
 
 **terraform-aws 需要满足的前提**（state key：`<前缀>/<环境>/terraform.tfstate`）：
 
@@ -155,8 +191,9 @@ Python 编写的 AWS Lambda 增删改查后端：四个 Lambda 分别负责**新
 > 私有子网里的 Lambda 无法访问 Secrets Manager，运行时读口令会直接失败。
 > Interface 端点按时区计费，dev 环境记得纳入成本考虑。
 
-**mysql-aws 的用法**：表结构只在开发阶段需要确认。把该工程建好的表名填进本工程的
-`TableName` 参数即可（默认 `items`）。部署时不会去读 mysql-aws，也不会建表。
+**mysql-aws 的用法**：表 `t_migration_check` 由该工程创建与维护，本工程不建表、
+也不在部署时去读它。表结构若有变动，需要同步修改 `common/schema.py` 里的
+字段校验与列白名单，并重新发布本工程。
 
 ### 3. 创建 OIDC 角色
 
@@ -281,7 +318,6 @@ aws iam create-open-id-connect-provider \
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | 模板参数 | 非敏感连接信息 |
 | `DB_USER` | 模板参数 | 可选，留空则用密钥中的 `username` |
 | `DB_SECRET_ARN` | 模板参数 | **只存 ARN，不存口令** |
-| `TABLE_NAME` | 模板参数 | 默认 `items`，会校验为合法 SQL 标识符 |
 | `LOG_LEVEL` | 模板参数 | 默认 `INFO` |
 | `STAGE` | 模板参数 | 环境名 |
 | `LambdaVpcSubnetIds` | 流水线从 terraform-aws state 注入 | 私有子网，逗号分隔 |
@@ -289,8 +325,7 @@ aws iam create-open-id-connect-provider \
 
 代码中**不存在** `DB_PASSWORD` 之类的变量——口令只能来自 Secrets Manager。
 
-`TABLE_NAME` 只需在**开发阶段**对着 mysql-aws 的表结构确认一次；
-部署时不会去读 mysql-aws，本工程也不负责建表。
+表名 `t_migration_check` 是代码常量，**不是**环境变量，因此不在此表中。
 
 ---
 

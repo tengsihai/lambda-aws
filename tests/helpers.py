@@ -18,7 +18,6 @@ TEST_ENV: dict[str, str] = {
     "DB_NAME": "appdb",
     "DB_USER": "app_user",
     "DB_SECRET_ARN": "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:db-AbCdEf",
-    "TABLE_NAME": "items",
     "LOG_LEVEL": "DEBUG",
 }
 

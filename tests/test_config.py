@@ -18,7 +18,6 @@ def test_settings_parsed_from_env() -> None:
     assert settings.db_name == TEST_ENV["DB_NAME"]
     assert settings.db_user == TEST_ENV["DB_USER"]
     assert settings.db_secret_arn == TEST_ENV["DB_SECRET_ARN"]
-    assert settings.table_name == "items"
     assert settings.log_level == "DEBUG"
 
 
@@ -51,15 +50,6 @@ def test_missing_required_setting_raises(monkeypatch: pytest.MonkeyPatch, missin
         get_settings()
 
 
-def test_table_name_must_be_identifier(monkeypatch: pytest.MonkeyPatch) -> None:
-    """表名会被拼进 SQL，非法标识符必须在启动阶段被拒绝。"""
-    monkeypatch.setenv("TABLE_NAME", "items; DROP TABLE users--")
-    get_settings.cache_clear()
-
-    with pytest.raises(ConfigError, match="TABLE_NAME"):
-        get_settings()
-
-
 def test_non_numeric_port_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     """端口必须是整数。"""
     monkeypatch.setenv("DB_PORT", "not-a-port")
@@ -77,13 +67,6 @@ def test_out_of_range_port_rejected(monkeypatch: pytest.MonkeyPatch, port: str) 
 
     with pytest.raises(ConfigError, match="DB_PORT"):
         get_settings()
-
-
-def test_table_name_defaults_to_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TABLE_NAME 可选，默认值为 items。"""
-    monkeypatch.delenv("TABLE_NAME", raising=False)
-    get_settings.cache_clear()
-    assert get_settings().table_name == "items"
 
 
 def test_port_defaults_to_3306(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,7 +92,6 @@ def test_settings_field_names_are_stable() -> None:
         "db_name",
         "db_user",
         "db_secret_arn",
-        "table_name",
         "log_level",
     }
 
@@ -118,5 +100,4 @@ def test_settings_types_are_correct() -> None:
     """配置项类型应符合声明。"""
     settings = get_settings()
     assert isinstance(settings.db_port, int)
-    assert isinstance(settings.table_name, str)
     assert isinstance(settings.db_secret_arn, str)

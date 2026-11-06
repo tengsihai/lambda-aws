@@ -28,7 +28,6 @@ Globals:
         DB_NAME: !Ref DbName
         DB_USER: !Ref DbUser
         DB_SECRET_ARN: !Ref DbSecretArn
-        TABLE_NAME: !Ref TableName
         LOG_LEVEL: !Ref LogLevel
         STAGE: !Ref Stage
 
@@ -75,14 +74,6 @@ Parameters:
     Type: String
     Description: Secrets Manager 中数据库凭据的 ARN（JSON，需包含 password）。
     MinLength: 1
-
-  TableName:
-    Type: String
-    Default: items
-    Description: >
-      业务表名。表结构由 mysql-aws 工程维护，只需在开发阶段确认一次，
-      之后作为本工程的配置传入；不会在部署时去读取 mysql-aws。
-    AllowedPattern: '^[A-Za-z_][A-Za-z0-9_]*$'
 
   LogLevel:
     Type: String
