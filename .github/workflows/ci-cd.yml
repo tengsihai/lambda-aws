@@ -2,12 +2,18 @@
 #
 # 分支模型：
 #   dev / staging / prod  每个环境一条分支，分支名即环境名
-#   main                  发布完成后的归档分支，只跑测试、不部署
+#   main                  发布完成后的归档分支，完全不触发流水线
+#   其他分支              开发与测试用的特性分支，跑测试但不部署
 #
 # 触发时机：
-#   - 从任意分支合并进环境分支（push 事件）→ 跑测试 → 部署到对应环境
-#   - 面向环境分支的 PR              → 只跑测试（合并前把关）
-#   - 手动触发                       → 跑测试 → 部署当前分支对应的环境
+#   - 任意非 main 分支的 push / PR → 跑测试（开发测试必须另起分支）
+#   - 合并进环境分支（push 事件）  → 跑测试 → 部署到对应环境
+#   - 手动触发                    → 跑测试 → 部署当前分支对应的环境
+#
+# 依赖的外部工程：
+#   - terraform-aws  提供 VPC 私有子网与 Lambda 安全组，部署时从其
+#                    S3 远端 state 里读 outputs（key: <前缀>/<环境>/terraform.tfstate）
+#   - mysql-aws      提供表结构；表名属于开发阶段的配置，见 README
 #
 # 安全约定：仓库中不存在任何长期有效的 AWS AccessKey。
 # 凭证由 GitHub OIDC 换取的临时凭证提供，角色 ARN 按环境配置在
@@ -17,9 +23,10 @@ name: CI/CD 流水线
 
 on:
   push:
-    branches: [main, dev, staging, prod]
+    # main 只做归档，不产生任何流水线运行
+    branches-ignore: [main]
   pull_request:
-    branches: [main, dev, staging, prod]
+    branches-ignore: [main]
   workflow_dispatch:
 
 permissions:
@@ -90,7 +97,8 @@ jobs:
       group: deploy-${{ github.ref_name }}
       cancel-in-progress: false
     env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      # 默认与 terraform-aws 的资源区域保持一致
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-1' }}
       STACK_NAME: ${{ vars.AWS_STACK_NAME || format('lambda-aws-{0}', github.ref_name) }}
       STAGE: ${{ github.ref_name }}
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'lambda-aws' }}
@@ -100,9 +108,9 @@ jobs:
       DB_NAME: ${{ vars.DB_NAME }}
       DB_USER: ${{ vars.DB_USER || '' }}
       DB_SECRET_ARN: ${{ vars.DB_SECRET_ARN }}
-      # VPC 配置；数据库在私有子网时必须填写
-      VPC_SUBNET_IDS: ${{ vars.VPC_SUBNET_IDS || '' }}
-      VPC_SECURITY_GROUP_IDS: ${{ vars.VPC_SECURITY_GROUP_IDS || '' }}
+      # terraform-aws 的远端 state：VPC 子网与安全组从这里读取
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY_PREFIX: ${{ vars.TF_STATE_KEY_PREFIX || 'network' }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -112,7 +120,7 @@ jobs:
           AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
         run: |
           missing=""
-          for name in AWS_ROLE_ARN DB_HOST DB_NAME DB_SECRET_ARN; do
+          for name in AWS_ROLE_ARN DB_HOST DB_NAME DB_SECRET_ARN TF_STATE_BUCKET; do
             if [ -z "${!name}" ]; then
               missing="$missing $name"
             fi
@@ -135,6 +143,38 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-${{ github.ref_name }}-${{ github.run_id }}
 
+      # ---------------------------------------------------------------------------
+      # VPC 子网与安全组不手工配置，一律取自 terraform-aws 的远端 state，
+      # 保证两个工程看到的是同一份网络拓扑。
+      # ---------------------------------------------------------------------------
+      - name: 从 terraform-aws state 读取 VPC 配置
+        id: tfstate
+        run: |
+          key="${TF_STATE_KEY_PREFIX}/${STAGE}/terraform.tfstate"
+          echo "读取 s3://${TF_STATE_BUCKET}/${key}"
+          if ! aws s3 cp "s3://${TF_STATE_BUCKET}/${key}" /tmp/tfstate.json >/dev/null; then
+            echo "::error::读取 terraform state 失败，请确认 TF_STATE_BUCKET 与 key 前缀"
+            exit 1
+          fi
+
+          subnets=$(jq -r '.outputs.private_subnet_ids.value // empty | if type == "array" then join(",") else . end' /tmp/tfstate.json)
+          sg=$(jq -r '.outputs.lambda_security_group_id.value // empty' /tmp/tfstate.json)
+
+          if [ -z "$subnets" ]; then
+            echo "::error::state 中缺少 outputs.private_subnet_ids"
+            exit 1
+          fi
+          if [ -z "$sg" ]; then
+            echo "::error::state 中缺少 outputs.lambda_security_group_id"
+            echo "::error::需要 terraform-aws 导出该输出（见本仓库 README「依赖的外部工程」）"
+            exit 1
+          fi
+
+          echo "private subnets: $subnets"
+          echo "lambda security group: $sg"
+          echo "subnets=$subnets" >> "$GITHUB_OUTPUT"
+          echo "security_group=$sg" >> "$GITHUB_OUTPUT"
+
       - name: 构建依赖层与四个函数
         run: sam build --template-file template.yaml
 
@@ -155,8 +195,8 @@ jobs:
               "DbName=$DB_NAME" \
               "DbUser=$DB_USER" \
               "DbSecretArn=$DB_SECRET_ARN" \
-              "LambdaVpcSubnetIds=$VPC_SUBNET_IDS" \
-              "LambdaVpcSecurityGroupIds=$VPC_SECURITY_GROUP_IDS"
+              "LambdaVpcSubnetIds=${{ steps.tfstate.outputs.subnets }}" \
+              "LambdaVpcSecurityGroupIds=${{ steps.tfstate.outputs.security_group }}"
 
       - name: 输出 API Gateway 访问地址
         id: api
@@ -170,7 +210,7 @@ jobs:
 
       - name: API 冒烟测试
         # 只校验「请求确实到达了 Lambda」，不校验业务数据。
-        # 表结构由专门的 DB 工程维护，这里不应与它耦合。
+        # 表结构由 mysql-aws 工程维护，这里不应与它耦合。
         run: |
           url="${{ steps.api.outputs.url }}/items"
           echo "GET $url"

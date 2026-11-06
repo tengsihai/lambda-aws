@@ -1,4 +1,7 @@
-"""查询资源用例：支持按 id 查询单条与分页列表。"""
+"""查询自检记录：支持按 id 查询与分页列表。
+
+已软删除（``is_deleted = 1``）的记录对读接口不可见。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,6 @@ import logging
 from typing import Any
 
 from common import db
-from common.config import get_settings
 from common.errors import NotFoundError
 from common.http import (
     error_response,
@@ -16,6 +18,7 @@ from common.http import (
     parse_request,
 )
 from common.logging_setup import configure_logging
+from common.schema import TABLE_NAME, serialize_row
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +44,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         raw_id = request.path_parameters.get("id")
         if raw_id:
             item = _get_item(raw_id)
-            return json_response(200, {"data": item})
+            return json_response(200, {"data": serialize_row(item)})
 
-        items, total = _list_items(request.query_parameters)
         limit = parse_int_param(
             request.query_parameters,
             "limit",
@@ -54,38 +56,38 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         offset = parse_int_param(
             request.query_parameters, "offset", default=0, minimum=0, maximum=MAX_OFFSET
         )
+        items, total = _list_items(limit, offset)
         return json_response(
             200,
-            {"data": items, "meta": {"total": total, "limit": limit, "offset": offset}},
+            {
+                "data": [serialize_row(row) for row in items],
+                "meta": {"total": total, "limit": limit, "offset": offset},
+            },
         )
     except Exception as exc:  # noqa: BLE001 - 入口必须把所有异常收敛为 HTTP 响应
         return error_response(exc)
 
 
 def _get_item(raw_id: Any) -> dict[str, Any]:
-    """按主键查询单条记录。"""
+    """按主键查询单条未删除的记录。"""
     item_id = parse_path_id(raw_id)
-    table = get_settings().table_name  # 已在 config 中校验为合法标识符
 
-    row = db.fetch_one(f"SELECT * FROM {table} WHERE id = %s", (item_id,))
+    row = db.fetch_one(
+        f"SELECT * FROM {TABLE_NAME} WHERE id = %s AND is_deleted = 0",
+        (item_id,),
+    )
     if row is None:
         raise NotFoundError(f"资源不存在: id={item_id}")
     return row
 
 
-def _list_items(params: dict[str, str]) -> tuple[list[dict[str, Any]], int]:
-    """分页查询列表，同时返回满足条件的总条数。"""
-    limit = parse_int_param(
-        params, "limit", default=DEFAULT_PAGE_SIZE, minimum=1, maximum=MAX_PAGE_SIZE
-    )
-    offset = parse_int_param(params, "offset", default=0, minimum=0, maximum=MAX_OFFSET)
-
-    table = get_settings().table_name  # 已在 config 中校验为合法标识符
+def _list_items(limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    """分页查询未删除的记录，同时返回满足条件的总条数。"""
     rows = db.fetch_all(
-        f"SELECT * FROM {table} ORDER BY id DESC LIMIT %s OFFSET %s",
+        f"SELECT * FROM {TABLE_NAME} WHERE is_deleted = 0 ORDER BY id DESC LIMIT %s OFFSET %s",
         (limit, offset),
     )
-    count_row = db.fetch_one(f"SELECT COUNT(*) AS total FROM {table}")
+    count_row = db.fetch_one(f"SELECT COUNT(*) AS total FROM {TABLE_NAME} WHERE is_deleted = 0")
     total = int((count_row or {}).get("total", 0))
 
     logger.info("查询列表成功 返回=%s 总数=%s", len(rows), total)

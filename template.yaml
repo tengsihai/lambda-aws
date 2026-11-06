@@ -28,7 +28,6 @@ Globals:
         DB_NAME: !Ref DbName
         DB_USER: !Ref DbUser
         DB_SECRET_ARN: !Ref DbSecretArn
-        TABLE_NAME: !Ref TableName
         LOG_LEVEL: !Ref LogLevel
         STAGE: !Ref Stage
 
@@ -76,12 +75,6 @@ Parameters:
     Description: Secrets Manager 中数据库凭据的 ARN（JSON，需包含 password）。
     MinLength: 1
 
-  TableName:
-    Type: String
-    Default: items
-    Description: 业务表名。
-    AllowedPattern: '^[A-Za-z_][A-Za-z0-9_]*$'
-
   LogLevel:
     Type: String
     Default: INFO
@@ -92,22 +85,22 @@ Parameters:
       - WARNING
       - ERROR
 
-  # ---- VPC（数据库在私有子网时必须配置） ----
+  # ---- VPC（取值来自 terraform-aws 的 state，由流水线自动填充） ----
+  # 这两项没有默认值：不在 VPC 里就访问不到私有子网的 MySQL，
+  # 因此宁可在部署时报缺参数，也不允许悄悄部署成连不上数据库的形态。
   LambdaVpcSubnetIds:
     Type: String
-    Default: ''
-    Description: 逗号分隔的子网 ID；留空表示 Lambda 不加入 VPC。
+    Description: >
+      逗号分隔的私有子网 ID。由 CI/CD 从 terraform-aws 的 state
+      outputs.private_subnet_ids 读取后注入，不需要手工配置。
+    MinLength: 1
 
   LambdaVpcSecurityGroupIds:
     Type: String
-    Default: ''
-    Description: 逗号分隔的安全组 ID；留空表示 Lambda 不加入 VPC。
-
-Conditions:
-  # 子网与安全组必须同时提供，否则不下发 VpcConfig
-  HasVpc: !And
-    - !Not [!Equals [!Ref LambdaVpcSubnetIds, '']]
-    - !Not [!Equals [!Ref LambdaVpcSecurityGroupIds, '']]
+    Description: >
+      逗号分隔的安全组 ID。由 CI/CD 从 terraform-aws 的 state
+      outputs.lambda_security_group_id 读取后注入，不需要手工配置。
+    MinLength: 1
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -150,15 +143,11 @@ Resources:
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref DbSecretArn
-        - !If
-          - HasVpc
-          - AWSLambdaVPCAccessExecutionRole
-          - !Ref AWS::NoValue
-      VpcConfig: !If
-        - HasVpc
-        - SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
-          SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
-        - !Ref AWS::NoValue
+        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
+        - AWSLambdaVPCAccessExecutionRole
+      VpcConfig:
+        SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
+        SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
       Events:
         CreateItem:
           Type: HttpApi
@@ -180,15 +169,11 @@ Resources:
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref DbSecretArn
-        - !If
-          - HasVpc
-          - AWSLambdaVPCAccessExecutionRole
-          - !Ref AWS::NoValue
-      VpcConfig: !If
-        - HasVpc
-        - SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
-          SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
-        - !Ref AWS::NoValue
+        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
+        - AWSLambdaVPCAccessExecutionRole
+      VpcConfig:
+        SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
+        SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
       Events:
         ListItems:
           Type: HttpApi
@@ -216,15 +201,11 @@ Resources:
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref DbSecretArn
-        - !If
-          - HasVpc
-          - AWSLambdaVPCAccessExecutionRole
-          - !Ref AWS::NoValue
-      VpcConfig: !If
-        - HasVpc
-        - SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
-          SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
-        - !Ref AWS::NoValue
+        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
+        - AWSLambdaVPCAccessExecutionRole
+      VpcConfig:
+        SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
+        SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
       Events:
         UpdateItem:
           Type: HttpApi
@@ -246,15 +227,11 @@ Resources:
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Ref DbSecretArn
-        - !If
-          - HasVpc
-          - AWSLambdaVPCAccessExecutionRole
-          - !Ref AWS::NoValue
-      VpcConfig: !If
-        - HasVpc
-        - SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
-          SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
-        - !Ref AWS::NoValue
+        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
+        - AWSLambdaVPCAccessExecutionRole
+      VpcConfig:
+        SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
+        SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
       Events:
         DeleteItem:
           Type: HttpApi

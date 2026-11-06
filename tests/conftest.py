@@ -27,7 +27,7 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """为每个测试注入干净的环境变量并清理各类进程级缓存。"""
     # 先清掉可能存在的真实变量，保证测试之间互不影响
     for key in list(os.environ):
-        if key.startswith(("DB_", "TABLE_", "LOG_LEVEL")):
+        if key.startswith(("DB_", "LOG_LEVEL")):
             monkeypatch.delenv(key, raising=False)
 
     for key, value in TEST_ENV.items():
