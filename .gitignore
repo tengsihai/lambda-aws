@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 工具缓存
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# SAM 构建产物
+.aws-sam/
+
+# 本地环境变量（真正的密钥只存在于 Secrets Manager 中）
+.env
+.env.*
+!.env.example
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 系统
+.DS_Store
