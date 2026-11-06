@@ -2,12 +2,13 @@
 #
 # 分支模型：
 #   dev / staging / prod  每个环境一条分支，分支名即环境名
-#   main                  发布完成后的归档分支，只跑测试、不部署
+#   main                  发布完成后的归档分支，完全不触发流水线
+#   其他分支              开发与测试用的特性分支，跑测试但不部署
 #
 # 触发时机：
-#   - 从任意分支合并进环境分支（push 事件）→ 跑测试 → 部署到对应环境
-#   - 面向环境分支的 PR              → 只跑测试（合并前把关）
-#   - 手动触发                       → 跑测试 → 部署当前分支对应的环境
+#   - 任意非 main 分支的 push / PR → 跑测试（开发测试必须另起分支）
+#   - 合并进环境分支（push 事件）  → 跑测试 → 部署到对应环境
+#   - 手动触发                    → 跑测试 → 部署当前分支对应的环境
 #
 # 安全约定：仓库中不存在任何长期有效的 AWS AccessKey。
 # 凭证由 GitHub OIDC 换取的临时凭证提供，角色 ARN 按环境配置在
@@ -17,9 +18,10 @@ name: CI/CD 流水线
 
 on:
   push:
-    branches: [main, dev, staging, prod]
+    # main 只做归档，不产生任何流水线运行
+    branches-ignore: [main]
   pull_request:
-    branches: [main, dev, staging, prod]
+    branches-ignore: [main]
   workflow_dispatch:
 
 permissions:
