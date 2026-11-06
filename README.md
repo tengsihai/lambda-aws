@@ -113,18 +113,52 @@ Python 编写的 AWS Lambda 增删改查后端：四个 Lambda 分别负责**新
 | `DB_HOST` | 是 | MySQL 主机名或 IP |
 | `DB_NAME` | 是 | 数据库名 |
 | `DB_SECRET_ARN` | 是 | Secrets Manager 中数据库凭据的 ARN |
-| `AWS_REGION` | 否 | 默认 `ap-southeast-1` |
+| `TF_STATE_BUCKET` | 是 | terraform-aws 存远端 state 的 S3 桶名 |
+| `AWS_REGION` | 否 | 默认 `ap-northeast-1`（与 terraform-aws 一致） |
 | `AWS_STACK_NAME` | 否 | 默认 `lambda-aws-<环境名>` |
 | `PROJECT_NAME` | 否 | 默认 `lambda-aws` |
 | `DB_PORT` | 否 | 默认 `3306` |
 | `DB_USER` | 否 | 留空则使用密钥中的 `username` 字段 |
-| `VPC_SUBNET_IDS` | 视情况 | 逗号分隔的子网 ID；数据库在私有子网时必须填 |
-| `VPC_SECURITY_GROUP_IDS` | 视情况 | 逗号分隔的安全组 ID；同上 |
+| `TF_STATE_KEY_PREFIX` | 否 | state key 前缀，默认 `network` |
+
+> **VPC 子网与安全组没有变量**：它们在部署时从 terraform-aws 的 state 里读取，
+> 见下节。手工配置只会造成两个工程不一致。
 
 > 变量是**非敏感配置**，放 Variables 即可。若某环境的变量只对特定分支可见，
 > 也可以直接配置在环境级别，GitHub 会优先取环境级变量。
 
-### 2. 创建 OIDC 角色
+### 2. 依赖的外部工程
+
+本工程不自己定义网络，也不自己维护表结构：
+
+| 工程 | 提供什么 | 本工程怎么用 |
+| --- | --- | --- |
+| `terraform-aws` | VPC 私有子网、Lambda 安全组 | 部署时从其 S3 state 读 `outputs` |
+| `mysql-aws` | 数据库表结构 | **只在开发阶段看一次**，据此确定 `TABLE_NAME` |
+
+**terraform-aws 需要满足的前提**（state key：`<前缀>/<环境>/terraform.tfstate`）：
+
+1. 根模块导出 `private_subnet_ids`（已有）；
+2. 根模块导出 `lambda_security_group_id`（**需新增**）：
+   ```hcl
+   output "lambda_security_group_id" {
+     description = "Security group attached to the Lambda functions."
+     value       = module.vpc.additional_security_group_ids["lambda"]
+   }
+   ```
+3. 用 `additional_security_groups` 建一张只出不入的 `lambda` 安全组，
+   并把它加进 `module.rds` 的 `allowed_security_group_ids`，
+   否则 RDS 只放行跳板机，Lambda 连不上数据库；
+4. 把 `secretsmanager` 加进 `interface_endpoint_services`。
+
+> 第 4 条是硬前提：该 VPC **没有 NAT 网关**，`interface_endpoint_services` 目前是空的，
+> 私有子网里的 Lambda 无法访问 Secrets Manager，运行时读口令会直接失败。
+> Interface 端点按时区计费，dev 环境记得纳入成本考虑。
+
+**mysql-aws 的用法**：表结构只在开发阶段需要确认。把该工程建好的表名填进本工程的
+`TableName` 参数即可（默认 `items`）。部署时不会去读 mysql-aws，也不会建表。
+
+### 3. 创建 OIDC 角色
 
 先建身份提供者（每个账号一次）：
 
@@ -187,6 +221,12 @@ aws iam create-open-id-connect-provider \
       ]
     },
     {
+      "Sid": "ReadTerraformState",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::platform-terraform-state-<账号ID>-<区域>/network/*"
+    },
+    {
       "Sid": "Deployables",
       "Effect": "Allow",
       "Action": [
@@ -219,7 +259,7 @@ aws iam create-open-id-connect-provider \
 > `secretsmanager:GetSecretValue` **不需要**给部署角色——它由 CloudFormation 写进
 > Lambda 的执行角色里，只有函数运行时需要。
 
-### 3. 配置 Secrets Manager
+### 4. 配置 Secrets Manager
 
 密钥内容必须是 JSON，至少包含 `password`：
 
@@ -244,8 +284,13 @@ aws iam create-open-id-connect-provider \
 | `TABLE_NAME` | 模板参数 | 默认 `items`，会校验为合法 SQL 标识符 |
 | `LOG_LEVEL` | 模板参数 | 默认 `INFO` |
 | `STAGE` | 模板参数 | 环境名 |
+| `LambdaVpcSubnetIds` | 流水线从 terraform-aws state 注入 | 私有子网，逗号分隔 |
+| `LambdaVpcSecurityGroupIds` | 流水线从 terraform-aws state 注入 | Lambda 安全组 |
 
 代码中**不存在** `DB_PASSWORD` 之类的变量——口令只能来自 Secrets Manager。
+
+`TABLE_NAME` 只需在**开发阶段**对着 mysql-aws 的表结构确认一次；
+部署时不会去读 mysql-aws，本工程也不负责建表。
 
 ---
 
@@ -275,14 +320,29 @@ make check          # 以上全部
 
 **部署报缺少变量**
 → 到 `Settings → Environments → <环境> → Variables` 补齐 `AWS_ROLE_ARN`、
-`DB_HOST`、`DB_NAME`、`DB_SECRET_ARN`。
+`DB_HOST`、`DB_NAME`、`DB_SECRET_ARN`、`TF_STATE_BUCKET`。
 
 **`AssumeRoleWithWebIdentity` 被拒绝**
 → 检查角色信任策略里的 `sub` 是否写成了
 `repo:tengsihai/lambda-aws:environment:<环境名>`，以及身份提供者 ARN 是否正确。
 
+**`读取 terraform state 失败`**
+→ 确认 `TF_STATE_BUCKET` 是否正确，以及 key 是否为
+`<TF_STATE_KEY_PREFIX>/<环境>/terraform.tfstate`（默认前缀 `network`）。
+同时确认部署角色有该桶的 `s3:GetObject`。
+
+**`state 中缺少 outputs.lambda_security_group_id`**
+→ terraform-aws 还没导出这个输出，按「依赖的外部工程」一节补齐后重新 apply。
+
+**运行时读口令报 `SecretsManager` 连接超时**
+→ Lambda 在私有子网里，而该 VPC 没有 NAT 网关。需要在 terraform-aws 把
+`secretsmanager` 加进 `interface_endpoint_services` 并 apply。
+
+**运行时连不上数据库（安全组/超时）**
+→ 确认 terraform-aws 已把 `lambda` 安全组加进 RDS 的 `allowed_security_group_ids`。
+
 **冒烟测试提示「请求没有到达 Lambda」**
 → 多半是 API Gateway 的路由或集成没建好，查看 CloudFormation 栈事件。
 
 **冒烟测试返回 200 以外但路由正常**
-→ 流水线只给出 warning。表结构由 DB 工程维护，本工程不做建表。
+→ 流水线只给出 warning。表结构由 mysql-aws 工程维护，本工程不做建表。
