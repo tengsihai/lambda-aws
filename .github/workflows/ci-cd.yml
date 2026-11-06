@@ -1,0 +1,193 @@
+# CI/CD 流水线
+#
+# 分支模型：
+#   dev / staging / prod  每个环境一条分支，分支名即环境名
+#   main                  发布完成后的归档分支，只跑测试、不部署
+#
+# 触发时机：
+#   - 从任意分支合并进环境分支（push 事件）→ 跑测试 → 部署到对应环境
+#   - 面向环境分支的 PR              → 只跑测试（合并前把关）
+#   - 手动触发                       → 跑测试 → 部署当前分支对应的环境
+#
+# 安全约定：仓库中不存在任何长期有效的 AWS AccessKey。
+# 凭证由 GitHub OIDC 换取的临时凭证提供，角色 ARN 按环境配置在
+# Settings -> Environments -> <环境> -> Variables 的 AWS_ROLE_ARN 中。
+
+name: CI/CD 流水线
+
+on:
+  push:
+    branches: [main, dev, staging, prod]
+  pull_request:
+    branches: [main, dev, staging, prod]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一分支的多次提交只保留最新一次运行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 第一步：质量门禁（所有分支都会执行）
+  # ---------------------------------------------------------------------------
+  test:
+    name: 代码检查与测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          # 与 Lambda 运行时保持一致
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            layer/requirements.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Lint 检查
+        run: ruff check .
+
+      - name: 格式检查
+        run: ruff format --check .
+
+      - name: 类型检查
+        run: mypy src tests
+
+      - name: 单元测试
+        run: pytest --cov=src --cov-report=term-missing
+
+  # ---------------------------------------------------------------------------
+  # 第二步：部署（仅环境分支，且测试通过后执行）
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 部署到 ${{ github.ref_name }}
+    needs: test
+    # main 是归档分支，feature 分支不部署，PR 不部署
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && contains(fromJSON('["dev", "staging", "prod"]'), github.ref_name)
+    runs-on: ubuntu-latest
+    # id-token: write 是向 GitHub OIDC 端点换取临时凭证的必要权限
+    permissions:
+      id-token: write
+      contents: read
+    # 环境名与分支名一致；该环境下的变量、密钥与审批规则在这里生效
+    environment: ${{ github.ref_name }}
+    # 部署不可被并发取消，避免栈状态互相覆盖
+    concurrency:
+      group: deploy-${{ github.ref_name }}
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+      STACK_NAME: ${{ vars.AWS_STACK_NAME || format('lambda-aws-{0}', github.ref_name) }}
+      STAGE: ${{ github.ref_name }}
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'lambda-aws' }}
+      # 数据库连接参数（均为非敏感配置，按环境配置在 Environment Variables 中）
+      DB_HOST: ${{ vars.DB_HOST }}
+      DB_PORT: ${{ vars.DB_PORT || '3306' }}
+      DB_NAME: ${{ vars.DB_NAME }}
+      DB_USER: ${{ vars.DB_USER || '' }}
+      DB_SECRET_ARN: ${{ vars.DB_SECRET_ARN }}
+      # VPC 配置；数据库在私有子网时必须填写
+      VPC_SUBNET_IDS: ${{ vars.VPC_SUBNET_IDS || '' }}
+      VPC_SECURITY_GROUP_IDS: ${{ vars.VPC_SECURITY_GROUP_IDS || '' }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 校验当前环境的必需配置
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+        run: |
+          missing=""
+          for name in AWS_ROLE_ARN DB_HOST DB_NAME DB_SECRET_ARN; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::环境「${STAGE}」缺少配置:${missing}"
+            echo "::error::请在 Settings -> Environments -> ${STAGE} -> Variables 中补齐"
+            exit 1
+          fi
+
+      - name: 安装 AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: 配置 AWS 凭证（OIDC）
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: 构建依赖层与四个函数
+        run: sam build --template-file template.yaml
+
+      - name: 部署（依赖层 + 四个 Lambda + API Gateway）
+        run: |
+          sam deploy \
+            --stack-name "$STACK_NAME" \
+            --s3-prefix "$STACK_NAME" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "ProjectName=$PROJECT_NAME" \
+              "Stage=$STAGE" \
+              "DbHost=$DB_HOST" \
+              "DbPort=$DB_PORT" \
+              "DbName=$DB_NAME" \
+              "DbUser=$DB_USER" \
+              "DbSecretArn=$DB_SECRET_ARN" \
+              "LambdaVpcSubnetIds=$VPC_SUBNET_IDS" \
+              "LambdaVpcSecurityGroupIds=$VPC_SECURITY_GROUP_IDS"
+
+      - name: 输出 API Gateway 访问地址
+        id: api
+        run: |
+          url=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "::notice::API Gateway 访问地址: $url"
+
+      - name: API 冒烟测试
+        # 只校验「请求确实到达了 Lambda」，不校验业务数据。
+        # 表结构由专门的 DB 工程维护，这里不应与它耦合。
+        run: |
+          url="${{ steps.api.outputs.url }}/items"
+          echo "GET $url"
+          code=$(curl -s -o /tmp/body.json -w '%{http_code}' --max-time 10 "$url" || true)
+          code=${code:-000}
+          echo "HTTP $code"
+          cat /tmp/body.json 2>/dev/null || true
+
+          case "$code" in
+            200|400|404|500)
+              # 已进入我们的 handler，说明 API Gateway 与四个 Lambda 关联正常
+              if [ "$code" != "200" ]; then
+                echo "::warning::接口返回 $code，路由正常但业务未通过（多半是表结构尚未就绪）"
+              fi
+              ;;
+            *)
+              echo "::error::冒烟测试失败：请求没有到达 Lambda（HTTP $code）"
+              exit 1
+              ;;
+          esac
