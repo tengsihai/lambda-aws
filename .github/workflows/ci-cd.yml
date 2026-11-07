@@ -1,14 +1,19 @@
 # CI/CD 流水线
 #
 # 分支模型：
-#   dev / staging / prod  每个环境一条分支，分支名即环境名
-#   main                  发布完成后的归档分支，完全不触发流水线
-#   其他分支              开发与测试用的特性分支，跑测试但不部署
+#   dev / staging / prod  环境分支，分支名即环境名；合并进哪条就部署哪个环境
+#   main                  发布后的归档分支，只跑测试，不部署
+#   其他分支              功能分支，只跑测试，不部署
 #
 # 触发时机：
-#   - 任意非 main 分支的 push / PR → 跑测试（开发测试必须另起分支）
-#   - 合并进环境分支（push 事件）  → 跑测试 → 部署到对应环境
-#   - 手动触发                    → 跑测试 → 部署当前分支对应的环境
+#   - PR（任意目标分支）        → 跑测试（评审辅助，不部署）
+#   - push 到 main / 环境分支   → 跑测试
+#   - 合并进环境分支（push）     → 测试通过后部署到对应环境
+#
+# 合并 PR 就是审批：本工作流没有 workflow_dispatch，
+# 也不提供「手动指定环境部署」的入口；失败后重跑对应的 job 即可。
+# 哪些环境已接入自动部署由仓库变量 DEPLOY_ENVIRONMENTS 控制（默认 ["dev"]），
+# 未接入的环境会跳过部署 job，不产生红叉。
 #
 # 依赖的外部工程：
 #   - terraform-aws  提供 VPC 私有子网与 Lambda 安全组，部署时从其
@@ -22,12 +27,10 @@
 name: CI/CD 流水线
 
 on:
-  push:
-    # main 只做归档，不产生任何流水线运行
-    branches-ignore: [main]
+  # PR 全跑；push 只关心 main 与环境分支。功能分支通过 PR 触发测试。
   pull_request:
-    branches-ignore: [main]
-  workflow_dispatch:
+  push:
+    branches: [main, dev, staging, prod]
 
 permissions:
   contents: read
@@ -81,10 +84,12 @@ jobs:
   deploy:
     name: 部署到 ${{ github.ref_name }}
     needs: test
-    # main 是归档分支，feature 分支不部署，PR 不部署
+    # 分支即环境，但只有环境分支部署；main 是归档分支，feature 分支和 PR 都不部署。
+    # DEPLOY_ENVIRONMENTS 决定哪些环境已接入自动部署（默认只有 dev）。
     if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      github.event_name == 'push'
       && contains(fromJSON('["dev", "staging", "prod"]'), github.ref_name)
+      && contains(fromJSON(vars.DEPLOY_ENVIRONMENTS || '["dev"]'), github.ref_name)
     runs-on: ubuntu-latest
     # id-token: write 是向 GitHub OIDC 端点换取临时凭证的必要权限
     permissions:
@@ -97,7 +102,7 @@ jobs:
       group: deploy-${{ github.ref_name }}
       cancel-in-progress: false
     env:
-      # 默认与 terraform-aws 的资源区域保持一致
+      # 默认部署区域
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-1' }}
       STACK_NAME: ${{ vars.AWS_STACK_NAME || format('lambda-aws-{0}', github.ref_name) }}
       STAGE: ${{ github.ref_name }}

@@ -108,19 +108,35 @@ POST /items
 
 ## 三、分支模型与 CI/CD
 
-| 分支 | 含义 | 是否部署 |
+与 `terraform-aws` 完全一致：**分支即环境，合并 PR 就是审批，`main` 只归档不部署。**
+
+| 分支 | 含义 | 流水线行为 |
 | --- | --- | --- |
-| `dev` | 开发环境 | 合并后部署到 **dev** |
-| `staging` | 预发环境 | 合并后部署到 **staging** |
-| `prod` | 生产环境 | 合并后部署到 **prod** |
-| `main` | **发布后归档** | 否，**完全不触发流水线** |
-| 其他分支 | 开发 / 测试用的特性分支 | 否，只跑测试 |
+| `dev` / `staging` / `prod` | 环境分支，分支名即环境名 | 合并进来 → 跑测试 → 部署到同名环境 |
+| `main` | 发布后的归档分支 | 只跑测试，**不部署**，也不接收日常提交 |
+| 功能分支（`feat/*`、`fix/*`…） | 开发用 | PR 到环境分支时跑测试，不部署 |
+
+```
+feat/xxx ──PR──► dev ──PR──► staging ──PR──► prod ──PR──► main（归档）
+                  │          │              │
+                  └ 部署 dev └ 部署 staging  └ 部署 prod
+```
 
 **触发时机**
 
-- 任意**非 main 分支**的 push / PR → 跑测试。开发与测试必须另起分支，`main` 只在发布后归档
-- **合并进环境分支**（`push` 事件）→ 跑测试 → 部署到该分支对应的环境
-- **手动触发**（`workflow_dispatch`）→ 跑测试 → 部署当前分支对应的环境
+- **PR（任意目标分支）** → 只跑测试，作为合并前的评审辅助
+- **push 到 `main` / 环境分支** → 跑测试
+- **合并进环境分支（push）** → 测试通过后部署到该分支对应的环境
+- **没有 `workflow_dispatch`**：合并即审批，不提供手动指定环境部署的入口；
+  失败后重跑对应的 job 即可
+
+环境名与分支名一致，因此 `dev` 分支的改动一定只发到 `dev` 环境。
+未接入的环境由仓库变量 `DEPLOY_ENVIRONMENTS` 控制（默认 `["dev"]`），
+不在列表里的环境会跳过部署 job，不产生红叉。
+
+**分支保护（建议）**：给 `dev` / `staging` / `prod` 配 ruleset——必须走 PR、
+必须通过 `test` 检查、禁止直接 push。`prod` 再给 GitHub Environment 加
+Required reviewers，作为合并之外的第二道审批。
 
 **流水线步骤**
 
@@ -150,7 +166,7 @@ POST /items
 | `DB_NAME` | 是 | 数据库名 |
 | `DB_SECRET_ARN` | 是 | Secrets Manager 中数据库凭据的 ARN |
 | `TF_STATE_BUCKET` | 是 | terraform-aws 存远端 state 的 S3 桶名 |
-| `AWS_REGION` | 否 | 默认 `ap-northeast-1`（与 terraform-aws 一致） |
+| `AWS_REGION` | 否 | 默认 `ap-northeast-1` |
 | `AWS_STACK_NAME` | 否 | 默认 `lambda-aws-<环境名>` |
 | `PROJECT_NAME` | 否 | 默认 `lambda-aws` |
 | `DB_PORT` | 否 | 默认 `3306` |
@@ -159,6 +175,10 @@ POST /items
 
 > **VPC 子网与安全组没有变量**：它们在部署时从 terraform-aws 的 state 里读取，
 > 见下节。手工配置只会造成两个工程不一致。
+
+> **仓库级变量 `DEPLOY_ENVIRONMENTS`**（Settings → Secrets and variables → Actions →
+> Variables）：决定哪些环境允许自动部署，默认 `["dev"]`。接入 staging / prod 时
+> 改成 `["dev","staging","prod"]`。
 
 > 变量是**非敏感配置**，放 Variables 即可。若某环境的变量只对特定分支可见，
 > 也可以直接配置在环境级别，GitHub 会优先取环境级变量。
