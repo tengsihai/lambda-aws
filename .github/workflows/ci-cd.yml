@@ -110,6 +110,8 @@ jobs:
       DB_SECRET_ARN: ${{ vars.DB_SECRET_ARN }}
       # 执行角色名由 terraform-aws 维护；缺失时按环境名推导
       LAMBDA_EXECUTION_ROLE_NAME: ${{ vars.LAMBDA_EXECUTION_ROLE_NAME || format('platform-{0}-lambda-execution', github.ref_name) }}
+      # 允许跨域的前端来源；每个环境可用 Variables 覆盖
+      CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN || 'https://d193yl670roc4e.cloudfront.net' }}
       # terraform-aws 的远端 state：VPC 子网与安全组从这里读取
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
       TF_STATE_KEY_PREFIX: ${{ vars.TF_STATE_KEY_PREFIX || 'network' }}
@@ -196,6 +198,7 @@ jobs:
             "DbName=$DB_NAME"
             "DbSecretArn=$DB_SECRET_ARN"
             "LambdaExecutionRoleName=$LAMBDA_EXECUTION_ROLE_NAME"
+            "CorsAllowOrigin=$CORS_ALLOW_ORIGIN"
             "LambdaVpcSubnetIds=${{ steps.tfstate.outputs.subnets }}"
             "LambdaVpcSecurityGroupIds=${{ steps.tfstate.outputs.security_group }}"
           )
