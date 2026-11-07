@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 # 类型参数 DictCursor 与连接建立时的 cursorclass 保持一致，
 # 这样 fetchone()/fetchall() 才会被推断为 dict 而不是 tuple。
 _connection: Connection[DictCursor] | None = None
-_connection_lock = threading.Lock()
+# 必须用 RLock：transaction() 先持锁，再调用 get_connection()，后者会再次
+# 获取同一把锁。用普通 Lock 时首次请求就会自锁，表现为 Lambda 一直超时。
+_connection_lock = threading.RLock()
 
 
 class DatabaseError(RuntimeError):
