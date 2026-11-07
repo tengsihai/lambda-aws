@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -167,6 +168,35 @@ def test_failed_connect_leaves_no_cache(monkeypatch: pytest.MonkeyPatch) -> None
         get_connection()
 
     assert db._connection is None  # noqa: SLF001 - 直接断言内部状态
+
+
+def test_transaction_does_not_deadlock_on_first_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """transaction() 持锁后调用 get_connection() 不应自锁。
+
+    回归测试：_connection_lock 曾是不可重入的 Lock，transaction() 先持有它，
+    get_connection() 再次获取时会把首次请求永久卡住（线上表现为 Lambda 超时）。
+    """
+    connection = FakeDriverConnection()
+    monkeypatch.setattr(db, "_create_connection", lambda: connection)
+    monkeypatch.setattr(db, "_connection", None)
+    errors: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            with transaction():
+                pass
+        except BaseException as exc:  # noqa: BLE001 - 收集起来交给主线程断言
+            errors.append(exc)
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive(), "transaction() 在首次请求时发生死锁"
+    assert errors == []
+    assert connection.commits == 1
 
 
 def test_transaction_commits_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
