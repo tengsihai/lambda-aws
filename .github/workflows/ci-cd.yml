@@ -46,10 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 安装 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           # 与 Lambda 运行时保持一致
           python-version: '3.13'
@@ -115,7 +115,13 @@ jobs:
       TF_STATE_KEY_PREFIX: ${{ vars.TF_STATE_KEY_PREFIX || 'network' }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      # sam build 需要本机有模板声明的 python3.13，runner 默认版本不一定是 3.13
+      - name: 安装 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
 
       - name: 校验当前环境的必需配置
         env:
@@ -134,12 +140,12 @@ jobs:
           fi
 
       - name: 安装 AWS SAM CLI
-        uses: aws-actions/setup-sam@v2
+        uses: aws-actions/setup-sam@v3
         with:
           use-installer: true
 
       - name: 配置 AWS 凭证（OIDC）
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
