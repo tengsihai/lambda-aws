@@ -75,6 +75,17 @@ Parameters:
     Description: Secrets Manager 中数据库凭据的 ARN（JSON，需包含 password）。
     MinLength: 1
 
+  # ---- 函数执行角色（由 terraform-aws 维护，四个函数共用） ----
+  # 只传角色名，ARN 在模板里按当前分区和账号拼接，避免写死账号 ID。
+  LambdaExecutionRoleName:
+    Type: String
+    Default: platform-dev-lambda-execution
+    Description: >
+      四个 Lambda 共享的执行角色名（不是 ARN）。角色需要
+      AWSLambdaBasicExecutionRole、AWSLambdaVPCAccessExecutionRole、
+      X-Ray 写入权限，以及针对 DbSecretArn 的 secretsmanager:GetSecretValue。
+    MinLength: 1
+
   LogLevel:
     Type: String
     Default: INFO
@@ -140,11 +151,8 @@ Resources:
       Description: 新增资源
       CodeUri: src/
       Handler: create.handler
-      Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref DbSecretArn
-        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
-        - AWSLambdaVPCAccessExecutionRole
+      # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
@@ -166,11 +174,8 @@ Resources:
       Description: 查询资源
       CodeUri: src/
       Handler: read.handler
-      Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref DbSecretArn
-        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
-        - AWSLambdaVPCAccessExecutionRole
+      # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
@@ -198,11 +203,8 @@ Resources:
       Description: 更新资源
       CodeUri: src/
       Handler: update.handler
-      Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref DbSecretArn
-        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
-        - AWSLambdaVPCAccessExecutionRole
+      # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
@@ -224,11 +226,8 @@ Resources:
       Description: 删除资源
       CodeUri: src/
       Handler: delete.handler
-      Policies:
-        - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: !Ref DbSecretArn
-        # Lambda 必须挂在 VPC 内才能访问私有子网里的 MySQL
-        - AWSLambdaVPCAccessExecutionRole
+      # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
