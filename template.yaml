@@ -150,7 +150,7 @@ Resources:
       FunctionName: !Sub '${ProjectName}-${Stage}-create'
       Description: 新增资源
       CodeUri: src/
-      Handler: create.handler
+      Handler: create.handler.lambda_handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
       Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
@@ -173,7 +173,7 @@ Resources:
       FunctionName: !Sub '${ProjectName}-${Stage}-read'
       Description: 查询资源
       CodeUri: src/
-      Handler: read.handler
+      Handler: read.handler.lambda_handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
       Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
@@ -202,7 +202,7 @@ Resources:
       FunctionName: !Sub '${ProjectName}-${Stage}-update'
       Description: 更新资源
       CodeUri: src/
-      Handler: update.handler
+      Handler: update.handler.lambda_handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
       Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
@@ -225,7 +225,7 @@ Resources:
       FunctionName: !Sub '${ProjectName}-${Stage}-delete'
       Description: 删除资源
       CodeUri: src/
-      Handler: delete.handler
+      Handler: delete.handler.lambda_handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
       Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
