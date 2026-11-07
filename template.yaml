@@ -76,13 +76,14 @@ Parameters:
     MinLength: 1
 
   # ---- 函数执行角色（由 terraform-aws 维护，四个函数共用） ----
-  LambdaExecutionRoleArn:
+  # 只传角色名，ARN 在模板里按当前分区和账号拼接，避免写死账号 ID。
+  LambdaExecutionRoleName:
     Type: String
-    Default: arn:aws:iam::790354569983:role/platform-dev-lambda-execution
+    Default: platform-dev-lambda-execution
     Description: >
-      四个 Lambda 共享的执行角色 ARN。角色需要 AWSLambdaBasicExecutionRole、
-      AWSLambdaVPCAccessExecutionRole、X-Ray 写入权限，以及针对 DbSecretArn 的
-      secretsmanager:GetSecretValue。
+      四个 Lambda 共享的执行角色名（不是 ARN）。角色需要
+      AWSLambdaBasicExecutionRole、AWSLambdaVPCAccessExecutionRole、
+      X-Ray 写入权限，以及针对 DbSecretArn 的 secretsmanager:GetSecretValue。
     MinLength: 1
 
   LogLevel:
@@ -151,7 +152,7 @@ Resources:
       CodeUri: src/
       Handler: create.handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
-      Role: !Ref LambdaExecutionRoleArn
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
@@ -174,7 +175,7 @@ Resources:
       CodeUri: src/
       Handler: read.handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
-      Role: !Ref LambdaExecutionRoleArn
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
@@ -203,7 +204,7 @@ Resources:
       CodeUri: src/
       Handler: update.handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
-      Role: !Ref LambdaExecutionRoleArn
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
@@ -226,7 +227,7 @@ Resources:
       CodeUri: src/
       Handler: delete.handler
       # 执行角色由 terraform-aws 统一维护，四个函数共用，本模板不再创建角色。
-      Role: !Ref LambdaExecutionRoleArn
+      Role: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LambdaExecutionRoleName}'
       VpcConfig:
         SubnetIds: !Split [',', !Ref LambdaVpcSubnetIds]
         SecurityGroupIds: !Split [',', !Ref LambdaVpcSecurityGroupIds]
