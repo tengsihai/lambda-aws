@@ -47,6 +47,15 @@ Parameters:
       - staging
       - prod
 
+  # ---- 前端跨域来源 ----
+  CorsAllowOrigin:
+    Type: String
+    Default: https://d193yl670roc4e.cloudfront.net
+    Description: >
+      允许跨域调用 API 的前端源，必须与浏览器里的 Origin 完全一致
+      （包含协议，不带末尾斜杠）。本地开发需要额外来源时，可在部署时覆盖。
+    AllowedPattern: '^https?://[^/]+$'
+
   # ---- 数据库（口令本身不在此处出现，只引用其 ARN） ----
   DbHost:
     Type: String
@@ -140,6 +149,19 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref Stage
+      # 浏览器跨域调用需要；AllowOrigins 必须与页面 Origin 完全一致
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref CorsAllowOrigin
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - content-type
+        MaxAge: 300
 
   # ---------------------------------------------------------------------------
   # 新增
