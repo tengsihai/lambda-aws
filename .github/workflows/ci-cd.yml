@@ -188,6 +188,24 @@ jobs:
 
       - name: 部署（依赖层 + 四个 Lambda + API Gateway）
         run: |
+          params=(
+            "ProjectName=$PROJECT_NAME"
+            "Stage=$STAGE"
+            "DbHost=$DB_HOST"
+            "DbPort=$DB_PORT"
+            "DbName=$DB_NAME"
+            "DbSecretArn=$DB_SECRET_ARN"
+            "LambdaExecutionRoleName=$LAMBDA_EXECUTION_ROLE_NAME"
+            "LambdaVpcSubnetIds=${{ steps.tfstate.outputs.subnets }}"
+            "LambdaVpcSecurityGroupIds=${{ steps.tfstate.outputs.security_group }}"
+          )
+
+          # DbUser 留空时由函数回退到密钥里的 username；
+          # SAM 不接受 "DbUser=" 这种空值参数，所以空值直接不传。
+          if [ -n "$DB_USER" ]; then
+            params+=("DbUser=$DB_USER")
+          fi
+
           sam deploy \
             --stack-name "$STACK_NAME" \
             --s3-prefix "$STACK_NAME" \
@@ -195,17 +213,7 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              "ProjectName=$PROJECT_NAME" \
-              "Stage=$STAGE" \
-              "DbHost=$DB_HOST" \
-              "DbPort=$DB_PORT" \
-              "DbName=$DB_NAME" \
-              "DbUser=$DB_USER" \
-              "DbSecretArn=$DB_SECRET_ARN" \
-              "LambdaExecutionRoleName=$LAMBDA_EXECUTION_ROLE_NAME" \
-              "LambdaVpcSubnetIds=${{ steps.tfstate.outputs.subnets }}" \
-              "LambdaVpcSecurityGroupIds=${{ steps.tfstate.outputs.security_group }}"
+            --parameter-overrides "${params[@]}"
 
       - name: 输出 API Gateway 访问地址
         id: api
